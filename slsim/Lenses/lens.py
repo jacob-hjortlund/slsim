@@ -191,6 +191,12 @@ class Lens(LensedSystemBase):
         max_image_separation=10,
         mag_arc_limit=None,
         second_brightest_image_cut=None,
+        min_num_images=2,
+        max_num_images=None,
+        min_ps_total_mag=None,
+        max_ps_total_mag=None,
+        min_time_delay=None,
+        max_time_delay=None,
     ):
         """Check whether multiple lensing configuration matches selection and
         plausibility criteria.
@@ -216,7 +222,14 @@ class Lens(LensedSystemBase):
                 max_image_separation=max_image_separation,
                 mag_arc_limit=mag_arc_limit,
                 second_brightest_image_cut=second_brightest_image_cut,
+                min_num_images=min_num_images,
+                max_num_images=max_num_images,
+                min_ps_total_mag=min_ps_total_mag,
+                max_ps_total_mag=max_ps_total_mag,
+                min_time_delay=min_time_delay,
+                max_time_delay=max_time_delay,
                 source_index=index,
+
             )
         if len(validity_results) == 1:
             return validity_results[0]
@@ -230,6 +243,12 @@ class Lens(LensedSystemBase):
         mag_arc_limit=None,
         second_brightest_image_cut=None,
         source_index=0,
+        min_num_images=2,
+        max_num_images=None,
+        min_ps_total_mag=None,
+        max_ps_total_mag=None,
+        min_time_delay=None,
+        max_time_delay=None,
     ):
         """Check whether a single lensing configuration matches selection and
         plausibility criteria.
@@ -275,7 +294,10 @@ class Lens(LensedSystemBase):
 
         # Criteria 4: The lensing configuration must produce at least two SL images.
         image_positions = self.point_source_image_positions()[source_index]
-        if len(image_positions[0]) < 2:
+        n_images = len(image_positions[0])
+        less_than_min_img = n_images < min_num_images
+        more_than_max_img = n_images > max_num_images
+        if less_than_min_img or more_than_max_img:
             return False
 
         # Criteria 5: The maximum separation between any two image positions must be
@@ -305,22 +327,66 @@ class Lens(LensedSystemBase):
                 if bool_mag_limit is False:
                     return False
         # TODO make similar criteria for point source magnitudes
+
+        if (min_ps_total_mag is not None) or (max_ps_total_mag is not None):
+            point_source_mags = self.point_source_magnification()
+            total_mags = np.array([np.sum(np.abs(mags)) for mags in point_source_mags])
+            does_not_pass = False
+            if min_ps_total_mag is not None:
+               does_not_pass = does_not_pass | np.any(total_mags < min_ps_total_mag)
+            if max_ps_total_mag is not None:
+                does_not_pass = does_not_pass | np.any(total_mags > max_ps_total_mag)
+            if does_not_pass:
+                return False
+            
+        if (min_time_delay is not None) or (max_time_delay is not None):
+            arrival_times = self.point_source_arrival_times()
+            max_time_delays = np.array(
+                [
+                    np.max(
+                        np.abs(
+                            np.subtract.outer(arr_times, arr_times)
+                        )
+                    )
+                    for arr_times in arrival_times 
+                ]
+            )
+            does_not_pass = False
+            if min_time_delay is not None:
+                does_not_pass = does_not_pass | np.any(max_time_delays < min_time_delay)
+            if max_time_delay is not None:
+                does_not_pass = does_not_pass | np.any(max_time_delays > max_time_delay)
+            if does_not_pass:
+                return False
+        
+
         # Criteria 7: (optional)
         # computes the magnitude of each image and if the second brightest image has
         # the magnitude less or equal to "second_bright_mag_max" provided in the dict
         # second_bright_image_cut.
 
         if second_brightest_image_cut is not None:
+            times = np.arange(-100, 102, 2)
             for band_max, mag_max in second_brightest_image_cut.items():
-
+                
                 image_magnitude_list = self.point_source_magnitude(
-                    band=band_max, lensed=True
+                    band=band_max, lensed=True, time=times
                 )
-                second_brightest_mag = np.sort(image_magnitude_list[source_index])[1]
+                source_mags = image_magnitude_list[source_index]
+                source_mags = np.where(
+                    ~np.isfinite(source_mags),
+                    np.nan,
+                    source_mags
+                )
+                second_brightest_mag = np.sort(
+                    np.nanmin(source_mags, axis=-1)
+                )[1]
                 if second_brightest_mag > mag_max:
                     return False
         return True
         # TODO: test for signal-to-noise ratio in surface brightness
+
+        
 
     @property
     def deflector_redshift(self):
